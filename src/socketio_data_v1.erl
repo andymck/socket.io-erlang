@@ -14,6 +14,7 @@
 -define(RESERVED_EVENTS, [<<"message">>, <<"connect">>, <<"disconnect">>,
                           <<"open">>, <<"close">>, <<"error">>, <<"retry">>,
                           <<"reconnect">>]).
+
 disconnect("") -> <<"0">>;
 disconnect(Endpoint) -> [<<"0::">>,Endpoint].
 
@@ -25,29 +26,29 @@ message(Id, EndPoint, Msg) when is_list(Id) ->
     [<<"3:">>, Id, $:, EndPoint, $:, Msg].
 
 json(Id, EndPoint, Msg) when is_integer(Id) ->
-    [<<"4:">>, integer_to_list(Id), $:, EndPoint, $:, jsx:term_to_json(Msg)];
+    [<<"4:">>, integer_to_list(Id), $:, EndPoint, $:, pre_encode_term(Msg)];
 json(Id, EndPoint, Msg) when is_list(Id) ->
-    [<<"4:">>, Id, $:, EndPoint, $:, jsx:term_to_json(Msg)].
+    [<<"4:">>, Id, $:, EndPoint, $:, pre_encode_term(Msg)].
 
 event(Id, EndPoint, Event, Msg) when is_integer(Id) ->
     case lists:member(iolist_to_binary(Event), ?RESERVED_EVENTS) of
         true -> erlang:error(badarg);
         false ->
             [<<"5:">>, integer_to_list(Id), $:, EndPoint, $:, Event,
-                ?BINFRAME, jsx:term_to_json(Msg)]
+                ?BINFRAME, pre_encode_term(Msg)]
     end;
 event(Id, EndPoint, Event, Msg) when is_list(Id) ->
     case lists:member(iolist_to_binary(Event), ?RESERVED_EVENTS) of
         true -> erlang:error(badarg);
         false ->
             [<<"5:">>, Id, $:, EndPoint, $:, Event,
-                ?BINFRAME, jsx:term_to_json(Msg)]
+                ?BINFRAME, pre_encode_term(Msg)]
     end.
 
 ack(Id) -> [<<"6:::">>, integer_to_list(Id)].
 
 ack(Id, Data) ->
-    [<<"6:::">>, integer_to_list(Id), $+, jsx:term_to_json(Data)].
+    [<<"6:::">>, integer_to_list(Id), $+, pre_encode_term(Data)].
 
 error(EndPoint, Reason) ->
     [<<"7::">>, EndPoint, $:, Reason].
@@ -55,6 +56,17 @@ error(EndPoint, Reason) ->
 error(EndPoint, Reason, Advice) ->
     [<<"7::">>, EndPoint, $:, Reason, $+, Advice].
 
+pre_encode_term(Term)->
+ Pre = fun(undefined) -> null;
+             (true) -> true;
+             (false) -> false;
+             (null) -> null;
+             (X) when is_atom(X) -> atom_to_binary(X,utf8);
+             (X) -> X
+          end,
+    Opts = [{pre_encode, Pre}],
+ jsx:term_to_json(Term, Opts).
+ 
 %%% PARSING
 
 decode(<<"0">>) -> disconnect;
@@ -69,16 +81,16 @@ decode(<<"3:", Rest/binary>>) ->
 decode(<<"4:", Rest/binary>>) ->
     {Id, R1} = id(Rest),
     {EndPoint, Data} = endpoint(R1),
-    {json, Id, EndPoint, jsx:json_to_term(Data)};
+    {json, Id, EndPoint, pre_encode_term(Data)};
 decode(<<"5:", Rest/binary>>) ->
     {Id, R1} = id(Rest),
     {EndPoint, R2} = endpoint(R1),
     {Event, JSON} = event(R2),
-    {event, Id, EndPoint, Event, jsx:json_to_term(JSON)};
+    {event, Id, EndPoint, Event, pre_encode_term(JSON)};
 decode(<<"6:::", Rest/binary>>) ->
     case p_ack(Rest) of
         {Id, JSON} ->
-            {ack, Id, jsx:json_to_term(JSON)};
+            {ack, Id, pre_encode_term(JSON)};
         Id -> {ack, Id}
     end;
 decode(<<"7::", Rest/binary>>) ->
